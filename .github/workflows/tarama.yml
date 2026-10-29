@@ -1,0 +1,44 @@
+# Bilgisayar kapalıyken ücretsiz çalıştırma: GitHub Actions her 5 dakikada bir tarama yapar
+# (açık depoda dakika sınırı yok; GitHub zamanlamayı birkaç dakika geciktirebilir).
+# Gizli (private) depoda ayda 2.000 dakika sınırı olduğu için orada "*/30" kullanın.
+# Gizli bilgiler: GitHub depo > Settings > Secrets and variables > Actions >
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (isteğe bağlı: KEEPA_API_KEY)
+# Veritabanı (tekrar bildirim engeli ve fiyat geçmişi) çalıştırmalar arasında cache ile korunur.
+name: firsat-taramasi
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}       # elle çalıştırma düğmesi
+
+concurrency:
+  group: firsat-taramasi
+  cancel-in-progress: false
+
+jobs:
+  tara:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Önceki veriyi geri yükle
+        uses: actions/cache/restore@v4
+        with:
+          path: veri
+          key: firsat-veri-${{ github.run_id }}
+          restore-keys: firsat-veri-
+      - name: Tara
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
+        run: python main.py --bir-kez
+      - name: Veriyi kaydet
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: veri
+          key: firsat-veri-${{ github.run_id }}

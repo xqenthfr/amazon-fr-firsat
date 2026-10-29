@@ -1,0 +1,3 @@
+# Ek paket gerekmez: program yalnızca Python'un kendi standart kütüphanesini kullanır.
+# (urllib, sqlite3, xml, json, logging, unittest)
+# Python 3.10 veya üstü gerekir.
