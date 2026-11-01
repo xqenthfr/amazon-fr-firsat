@@ -28,6 +28,28 @@ ORNEK_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 </channel></rss>""".encode("utf-8")
 
 
+def ornek_sayfa() -> bytes:
+    """Dealabs liste sayfasını taklit eden sentetik HTML (gerçek veri değil)."""
+    import html as h
+    import time
+    simdi = int(time.time())
+
+    def kart(no, magaza, alan, fiyat, normal, suresi_doldu=False, derece=12.5):
+        veri = {"name": "ThreadMainListItemNormalizer", "props": {"thread": {
+            "threadId": str(no), "titleSlug": f"urun-{no}", "title": f"Aspirateur Dyson TEST {no} l'original",
+            "status": "Activated", "isExpired": suresi_doldu, "temperature": derece, "type": "Deal",
+            "publishedAt": simdi - 600, "voucherCode": "ABC10" if no == 900001 else "", "linkHost": alan,
+            "merchant": {"merchantName": magaza}, "mainGroup": {"threadGroupName": "Électroménager"},
+            "price": fiyat, "nextBestPrice": normal, "shipping": {"isFree": True, "price": 0}}}}
+        return f"<div class=\"js-vue3\" data-vue3='{h.escape(json.dumps(veri), quote=True)}'></div>"
+
+    return ("<html><body>" + kart(900001, "Amazon", "www.amazon.fr", 40, 100, derece=345.7)
+            + kart(900002, "Amazon", "www.amazon.de", 30, 90)
+            + kart(900003, "Amazon", "www.amazon.fr", 20, 80, suresi_doldu=True)
+            + kart(900004, "Fnac", "www.fnac.com", 10, 50)
+            + "<div data-vue3='{\"name\":\"Baska\"}'></div></body></html>").encode("utf-8")
+
+
 class Dealabs(unittest.TestCase):
     def test_ayristirma(self):
         tek = DealabsKaynagi(["groupe/erreur-de-prix"], max_yas_saat=0).ayristir(ORNEK_RSS, "groupe/erreur-de-prix")
@@ -51,7 +73,7 @@ class Dealabs(unittest.TestCase):
         def getir(url):
             istenen.append(url)
             return 200, ORNEK_RSS
-        DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0).teklifleri_al()
+        DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0, sayfa_kullan=False).teklifleri_al()
         self.assertEqual(istenen, ["https://www.dealabs.com/rss/nouveaux"])
 
     def test_ilan_no_yoksa_arama_baglantisi(self):
@@ -73,7 +95,7 @@ class Dealabs(unittest.TestCase):
         def getir(url):
             istenen.append(url.rsplit("/rss/", 1)[1])
             return 200, ORNEK_RSS
-        k = DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0, depo=depo,
+        k = DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0, depo=depo, sayfa_kullan=False,
                            yedek_akislar=["a", "b", "c"], yedek_her_tarama=2)
         k.teklifleri_al()
         k.teklifleri_al()
@@ -90,7 +112,7 @@ class Dealabs(unittest.TestCase):
         def getir(url):
             istenen.append(url.rsplit("/rss/", 1)[1])
             return 200, ORNEK_RSS
-        k = DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0, depo=depo,
+        k = DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0, depo=depo, sayfa_kullan=False,
                            yedek_akislar=["a", "b", "c"], yedek_her_tarama=1)
         k.teklifleri_al()
         self.assertTrue(k.bosluk_var)
@@ -109,11 +131,50 @@ class Dealabs(unittest.TestCase):
 
         def getir(url):
             return 200, (sicak if url.endswith("tendance") else ORNEK_RSS)
-        tek = DealabsKaynagi(["nouveaux", "tendance"], getir=getir, max_yas_saat=0).teklifleri_al()
+        tek = DealabsKaynagi(["nouveaux", "tendance"], getir=getir, max_yas_saat=0, sayfa_kullan=False).teklifleri_al()
         ninja = [t for t in tek if "Ninja" in t.baslik][0]
         self.assertEqual(ninja.derece, 412)
         self.assertTrue(ninja.baslik.startswith("Friteuse Ninja"))
         self.assertIn("tendance", ninja.sinyaller)
+
+    def test_liste_sayfasi(self):
+        sayfa = ornek_sayfa()
+        tek = DealabsKaynagi([], max_yas_saat=48).ayristir_sayfa(sayfa, "nouveaux")
+        self.assertEqual([t.urun_anahtari for t in tek], ["dealabs:900001"])  # .de, süresi dolmuş, Fnac elendi
+        t = tek[0]
+        self.assertEqual((t.fiyat, t.normal_fiyat_beyan, t.kargo, t.derece), (40.0, 100.0, 0.0, 345))
+        self.assertEqual(t.bag, "https://www.dealabs.com/visit/threadmain/900001")
+        self.assertTrue(any("ABC10" in n for n in t.notlar))
+        a = analiz_et(t)
+        self.assertEqual(a.indirim_yuzde, 60.0)
+        self.assertLessEqual(a.puan, 70)
+
+    def test_sayfa_bozuksa_rss_kullanilir(self):
+        def getir(url):
+            if "/rss/" in url:
+                return 200, ORNEK_RSS
+            return 200, b"<html>yeni tasarim</html>"
+        k = DealabsKaynagi(["nouveaux"], getir=getir, max_yas_saat=0)
+        self.assertEqual(len(k.teklifleri_al()), 2)
+        self.assertTrue(any("RSS kullanıldı" in h for h in k.son_hatalar))
+
+    def test_sayfa_varsa_rss_istenmez(self):
+        istenen = []
+
+        def getir(url):
+            istenen.append(url)
+            return 200, ornek_sayfa()
+        DealabsKaynagi(["nouveaux", "tendance"], getir=getir).teklifleri_al()
+        self.assertEqual(istenen, ["https://www.dealabs.com/nouveaux", "https://www.dealabs.com/hot"])
+
+    def test_yedekler_rssten_okunur(self):
+        istenen = []
+
+        def getir(url):
+            istenen.append(url)
+            return 200, (ORNEK_RSS if "/rss/" in url else ornek_sayfa())
+        DealabsKaynagi(["nouveaux"], getir=getir, yedek_akislar=["groupe/dyson"]).teklifleri_al()
+        self.assertEqual(istenen, ["https://www.dealabs.com/nouveaux", "https://www.dealabs.com/rss/groupe/dyson"])
 
     def test_bozuk_xml(self):
         with self.assertRaises(KaynakHatasi):
@@ -124,7 +185,7 @@ class Dealabs(unittest.TestCase):
             if url.endswith("tendance"):
                 return 503, b""
             return 200, ORNEK_RSS
-        k = DealabsKaynagi(["nouveaux", "tendance"], getir=getir, max_yas_saat=0)
+        k = DealabsKaynagi(["nouveaux", "tendance"], getir=getir, max_yas_saat=0, sayfa_kullan=False)
         self.assertEqual(len(k.teklifleri_al()), 2)
         self.assertEqual(len(k.son_hatalar), 1)
 

@@ -121,7 +121,8 @@ class Teklif:
     notlar: list[str] = field(default_factory=list)  # varyant/paket uyarıları vb.
     ek_bag: str | None = None     # ör. Dealabs ilan sayfası
     kargo_prime_varsayim: bool = False  # kargo bilinmiyor ama Prime ile muhtemelen ücretsiz
-    derece: int | None = None     # Dealabs topluluk beğenisi (°); yalnızca 'tendance' akışında var
+    derece: int | None = None     # Dealabs topluluk beğenisi (°)
+    normal_fiyat_beyan: float | None = None  # ilanı paylaşanın yazdığı normal fiyat (doğrulanmamış)
 
     def etkin_fiyat(self) -> float | None:
         if self.fiyat is None:
@@ -296,7 +297,14 @@ def analiz_et(t: Teklif) -> Analiz:
         elif "tendance" in t.sinyaller:
             puan += 25
             nedenler.append("Dealabs'ta popüler (tendance)")
-        if t.liste_fiyati and t.liste_fiyati > etkin:
+        if t.normal_fiyat_beyan and t.normal_fiyat_beyan > etkin:
+            indirim = round((1 - etkin / t.normal_fiyat_beyan) * 100, 1)
+            referans, referans_adi = t.normal_fiyat_beyan, "ilanda yazan normal fiyat"
+            puan += _sinirla((indirim / 100 - 0.2) / 0.5) * 35
+            if indirim >= 30:
+                nedenler.append(f"İlanda normal fiyatı {t.normal_fiyat_beyan:.2f} € yazıyor (%{indirim:.0f} ucuz)")
+            uyarilar.append("Normal fiyat ilanı paylaşan kişinin beyanı; Amazon geçmişiyle doğrulanmadı")
+        elif t.liste_fiyati and t.liste_fiyati > etkin:
             indirim = round((1 - etkin / t.liste_fiyati) * 100, 1)
             referans, referans_adi = t.liste_fiyati, "liste fiyatı (satıcı beyanı)"
             puan += _sinirla((indirim / 100 - 0.2) / 0.6) * 25

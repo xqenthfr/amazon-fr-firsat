@@ -126,13 +126,20 @@ DERECE_DESENI = re.compile(r"^\s*(-?\d{1,5})°\s*-\s*")
 ASIN_DESENI = re.compile(r"amazon\.fr/(?:[^\s\"'<>]*/)?(?:dp|gp/product)/([A-Z0-9]{10})")
 
 
+# Liste sayfalarındaki ilan kartı verisi (data-vue3 özniteliği, HTML kaçışlı JSON)
+VUE_DESENI = re.compile(r"data-vue3='([^']*)'")
+# RSS akış adı -> liste sayfası yolu (robots.txt bu yollara izin veriyor; sadece sorgu parametreleri yasak)
+SAYFA_YOLLARI = {"tendance": "hot"}
+
+
 class DealabsKaynagi:
     ad = "dealabs"
     TABAN = "https://www.dealabs.com/rss/"
+    SAYFA_TABAN = "https://www.dealabs.com/"
 
     def __init__(self, akislar: list[str], sadece_amazon: bool = True, getir=http_getir,
                  max_yas_saat: float = 48, yedek_akislar: list[str] | None = None,
-                 yedek_her_tarama: int = 2, depo=None):
+                 yedek_her_tarama: int = 2, depo=None, sayfa_kullan: bool = True):
         self.akislar = akislar
         self.sadece_amazon = sadece_amazon
         self.getir = getir
@@ -141,6 +148,9 @@ class DealabsKaynagi:
         self.yedek_her_tarama = yedek_her_tarama
         self.depo = depo
         self.bosluk_var = False
+        self.sayfa_kullan = sayfa_kullan
+        self.sayfa_uyarilari: list[str] = []
+        self._sayfa_tarihleri: list[datetime] = []
 
     def _durum(self, anahtar, varsayilan=None):
         return self.depo.durum_al(anahtar, varsayilan) if self.depo else varsayilan
@@ -159,10 +169,9 @@ class DealabsKaynagi:
                 pass
         return tarihler
 
-    def _bosluk_kontrol(self, govde: bytes) -> None:
+    def _bosluk_kontrol(self, tarihler: list[datetime]) -> None:
         """'nouveaux' listesindeki en eski ilan, önceki turda gördüğümüz en yeni ilandan daha
         yeniyse aradaki ilanları kaçırmış olabiliriz -> tüm yedek akışlar okunur."""
-        tarihler = self._tarihler(govde)
         if not tarihler:
             return
         onceki = self._durum("dealabs_son_ilan")
@@ -181,18 +190,38 @@ class DealabsKaynagi:
         self._durum_yaz("dealabs_yedek_sira", (sira + n) % len(self.yedek_akislar))
         return [self.yedek_akislar[(sira + i) % len(self.yedek_akislar)] for i in range(n)]
 
-    def _akisi_oku(self, akis: str, sonuc: dict[str, Teklif]) -> None:
+    def _akisi_getir(self, akis: str, sayfa: bool = True) -> list[Teklif]:
+        """Önce liste sayfası (normal fiyat, kargo, derece içerir), olmazsa RSS."""
+        if self.sayfa_kullan and sayfa:
+            try:
+                kod, govde = self.getir(self.SAYFA_TABAN + SAYFA_YOLLARI.get(akis, akis))
+                if kod == 200:
+                    teklifler = self.ayristir_sayfa(govde, akis)
+                    if teklifler is not None:
+                        if akis == "nouveaux":
+                            self._bosluk_kontrol(self._sayfa_tarihleri)
+                        return teklifler
+            except KaynakHatasi:
+                pass
+            self.sayfa_uyarilari.append(f"Dealabs sayfası '{akis}' okunamadı, RSS kullanıldı")
         kod, govde = self.getir(self.TABAN + akis)
         if kod != 200:
             raise KaynakHatasi(f"Dealabs akışı '{akis}' HTTP {kod} döndü")
         if akis == "nouveaux":
-            self._bosluk_kontrol(govde)
-        for t in self.ayristir(govde, akis):
-            if t.urun_anahtari in sonuc:  # aynı ilan birden çok akışta
+            self._bosluk_kontrol(self._tarihler(govde))
+        return self.ayristir(govde, akis)
+
+    def _akisi_oku(self, akis: str, sonuc: dict[str, Teklif], sayfa: bool = True) -> None:
+        for t in self._akisi_getir(akis, sayfa):
+            if t.urun_anahtari in sonuc:  # aynı ilan birden çok akışta: bilgileri birleştir
                 eski = sonuc[t.urun_anahtari]
                 eski.sinyaller = sorted(set(eski.sinyaller + t.sinyaller))
                 if t.derece is not None and (eski.derece is None or t.derece > eski.derece):
                     eski.derece = t.derece
+                if eski.normal_fiyat_beyan is None:
+                    eski.normal_fiyat_beyan = t.normal_fiyat_beyan
+                if eski.kargo is None:
+                    eski.kargo = t.kargo
             else:
                 sonuc[t.urun_anahtari] = t
 
@@ -200,30 +229,32 @@ class DealabsKaynagi:
         sonuc: dict[str, Teklif] = {}
         hatalar = []
         self.bosluk_var = False
+        self.sayfa_uyarilari = []
         # Önce ana akışlar (boşluk kontrolü burada yapılır), sonra yedekler
         for akis in self.akislar:
             try:
                 self._akisi_oku(akis, sonuc)
             except KaynakHatasi as e:
                 hatalar.append(str(e))
+        # Kategori sayfaları beğeniye göre sıralı (en yeniler görünmez), bu yüzden yedekler RSS'ten
         for akis in self._yedekler():
             if akis in self.akislar:
                 continue
             try:
-                self._akisi_oku(akis, sonuc)
+                self._akisi_oku(akis, sonuc, sayfa=False)
             except KaynakHatasi as e:
                 hatalar.append(str(e))
         if hatalar and not sonuc:
             raise KaynakHatasi("; ".join(hatalar))
-        self.son_hatalar = hatalar
+        self.son_hatalar = hatalar + self.sayfa_uyarilari
         return list(sonuc.values())
 
     def ayristir(self, xml_bayt: bytes, akis: str = "") -> list[Teklif]:
+        """RSS akışını ayrıştırır (yedek yol: liste sayfası okunamazsa)."""
         try:
             kok = ET.fromstring(xml_bayt)
         except ET.ParseError as e:
             raise KaynakHatasi(f"Dealabs RSS okunamadı: {e}") from e
-        sinyal = {"groupe/erreur-de-prix": "erreur_de_prix", "tendance": "tendance"}.get(akis)
         teklifler = []
         for item in kok.iter("item"):
             satici_el = item.find(PEPPER_NS + "merchant")
@@ -236,64 +267,128 @@ class DealabsKaynagi:
             derece = int(dm.group(1)) if dm else None
             if dm:
                 baslik = baslik[dm.end():]
-            aciklama = item.findtext("description") or ""
-            fiyat = eur_oku(satici_el.get("price") if satici_el is not None else None)
-            bag = (item.findtext("link") or "").strip()
             try:
-                zaman = parsedate_to_datetime(item.findtext("pubDate") or "")
-                zaman = zaman.astimezone(timezone.utc)
+                zaman = parsedate_to_datetime(item.findtext("pubDate") or "").astimezone(timezone.utc)
             except (TypeError, ValueError):
                 zaman = datetime.now(timezone.utc)
-            if self.max_yas_saat and zaman < datetime.now(timezone.utc) - timedelta(hours=self.max_yas_saat):
-                continue
-            m = ASIN_DESENI.search(aciklama)
-            asin = m.group(1) if m else None
-            b_kucuk = baslik.lower()
-            if "vendeur tiers" in b_kucuk or "marketplace" in b_kucuk:
-                satici = SATICI_PAZARYERI
-            elif "vendu par amazon" in b_kucuk or "expédié et vendu par amazon" in aciklama.lower():
-                satici = SATICI_AMAZON
-            else:
-                satici = SATICI_BILINMIYOR  # 'Amazon' mağazası, satıcının Amazon olduğu anlamına gelmez
-            durum = DURUM_KULLANILMIS if re.search(r"reconditionn|occasion|seconde main|warehouse",
-                                                   b_kucuk) else DURUM_YENI
-            notlar = []
-            if re.search(r"\blot de\b|\bx\d\b|\bpack\b|\bbundle\b", b_kucuk):
-                notlar.append("Paket/lot ilanı olabilir; birim fiyatı kontrol edin")
-            if "coupon" in b_kucuk or "code promo" in b_kucuk or "via " in b_kucuk:
-                notlar.append("Fiyat kupon/kod/koşul içerebilir (ilanı okuyun)")
-            kategori = item.findtext("category") or ""
-            ilan_no = bag.rstrip("/").rsplit("-", 1)[-1]
-            if asin:
-                amazon_bag = f"https://www.amazon.fr/dp/{asin}"
-            elif ilan_no.isdigit():
-                # Dealabs'ın "Voir le deal" yönlendirmesi: tıklayınca doğrudan Amazon ürün sayfası açılır.
-                # Program bu adresi kendisi ZİYARET ETMEZ (robots.txt /visit/ yolunu botlara kapatıyor);
-                # sadece mesaja koyar, tıklayan kişi sizsiniz.
-                amazon_bag = f"https://www.dealabs.com/visit/threadmain/{ilan_no}"
-            else:
-                amazon_bag = "https://www.amazon.fr/s?k=" + urllib.parse.quote_plus(baslik[:120])
-                notlar.append("ASIN bilinmiyor: bağlantı Amazon.fr araması; doğru ürün/varyantı kontrol edin")
-            teklifler.append(Teklif(
-                kaynak=self.ad,
-                urun_anahtari=f"dealabs:{ilan_no}",
-                baslik=baslik,
-                fiyat=fiyat,
-                bag=amazon_bag,
-                kontrol_zamani=zaman,
-                asin=asin,
-                kargo=None,
-                durum=durum,
-                satici=satici,
-                stokta=None,
-                kategori=kategori,
-                sinyaller=[s for s in [sinyal] if s] + (
-                    ["baslik_hata"] if HATA_KELIMELERI.search(f"{b_kucuk} {aciklama.lower()}") else []),
-                notlar=notlar,
-                ek_bag=bag,
-                derece=derece,
-            ))
+            bag = (item.findtext("link") or "").strip()
+            t = self._teklif_yap(
+                ilan_no=bag.rstrip("/").rsplit("-", 1)[-1], baslik=baslik,
+                aciklama=item.findtext("description") or "",
+                fiyat=eur_oku(satici_el.get("price") if satici_el is not None else None),
+                ilan_bag=bag, zaman=zaman, kategori=item.findtext("category") or "", akis=akis,
+                derece=derece)
+            if t:
+                teklifler.append(t)
         return teklifler
+
+    def ayristir_sayfa(self, html_bayt: bytes, akis: str = "") -> list[Teklif] | None:
+        """Dealabs liste sayfasındaki ilan kartlarının verisini okur. Bu veri RSS'ten zengindir:
+        ilanı paylaşanın yazdığı normal fiyat, kargo, derece ve mağaza adresi (amazon.fr mi?).
+        Hiç ilan kartı bulunamazsa None döner (sayfa düzeni değişmiş olabilir -> RSS'e düşülür)."""
+        metin = html_bayt.decode("utf-8", "replace")
+        teklifler: list[Teklif] = []
+        tarihler: list[datetime] = []
+        bulundu = False
+        for m in VUE_DESENI.finditer(metin):
+            try:
+                veri = json.loads(html.unescape(m.group(1)))
+            except ValueError:
+                continue
+            if veri.get("name") != "ThreadMainListItemNormalizer":
+                continue
+            th = (veri.get("props") or {}).get("thread") or {}
+            if th.get("type") != "Deal" or not th.get("threadId"):
+                continue
+            bulundu = True
+            zaman = (datetime.fromtimestamp(th["publishedAt"], tz=timezone.utc)
+                     if isinstance(th.get("publishedAt"), (int, float)) and th["publishedAt"] > 0
+                     else datetime.now(timezone.utc))
+            tarihler.append(zaman)
+            if th.get("isExpired") or th.get("status") not in (None, "Activated"):
+                continue
+            magaza = ((th.get("merchant") or {}).get("merchantName") or "").lower()
+            alan = (th.get("linkHost") or "").lower()
+            if self.sadece_amazon:
+                if alan and "amazon." in alan and not alan.endswith("amazon.fr"):
+                    continue  # amazon.de / .it / .es ilanları
+                if "amazon" not in magaza and not alan.endswith("amazon.fr"):
+                    continue
+            kargo_v = th.get("shipping") or {}
+            kargo = 0.0 if kargo_v.get("isFree") else (
+                float(kargo_v["price"]) if isinstance(kargo_v.get("price"), (int, float)) and kargo_v["price"] > 0
+                else None)
+            fiyat = th.get("price") if isinstance(th.get("price"), (int, float)) and th["price"] > 0 else None
+            normal = th.get("nextBestPrice")
+            t = self._teklif_yap(
+                ilan_no=str(th["threadId"]), baslik=html.unescape(th.get("title") or ""), aciklama="",
+                fiyat=float(fiyat) if fiyat else None,
+                ilan_bag=f"https://www.dealabs.com/bons-plans/{th.get('titleSlug', '')}-{th['threadId']}",
+                zaman=zaman, kategori=((th.get("mainGroup") or {}).get("threadGroupName") or ""), akis=akis,
+                derece=int(th["temperature"]) if isinstance(th.get("temperature"), (int, float)) else None,
+                kargo=kargo,
+                normal_fiyat=float(normal) if isinstance(normal, (int, float)) and normal > 0 else None,
+                kupon_kodu=th.get("voucherCode") or "")
+            if t:
+                teklifler.append(t)
+        self._sayfa_tarihleri = tarihler
+        return teklifler if bulundu else None
+
+    def _teklif_yap(self, ilan_no: str, baslik: str, aciklama: str, fiyat: float | None, ilan_bag: str,
+                    zaman: datetime, kategori: str, akis: str, derece: int | None,
+                    kargo: float | None = None, normal_fiyat: float | None = None,
+                    kupon_kodu: str = "") -> Teklif | None:
+        if self.max_yas_saat and zaman < datetime.now(timezone.utc) - timedelta(hours=self.max_yas_saat):
+            return None
+        m = ASIN_DESENI.search(aciklama)
+        asin = m.group(1) if m else None
+        b_kucuk = baslik.lower()
+        if "vendeur tiers" in b_kucuk or "marketplace" in b_kucuk:
+            satici = SATICI_PAZARYERI
+        elif "vendu par amazon" in b_kucuk or "expédié et vendu par amazon" in aciklama.lower():
+            satici = SATICI_AMAZON
+        else:
+            satici = SATICI_BILINMIYOR  # 'Amazon' mağazası, satıcının Amazon olduğu anlamına gelmez
+        durum = DURUM_KULLANILMIS if re.search(r"reconditionn|occasion|seconde main|warehouse",
+                                               b_kucuk) else DURUM_YENI
+        notlar = []
+        if re.search(r"\blot de\b|\bx\d\b|\bpack\b|\bbundle\b", b_kucuk):
+            notlar.append("Paket/lot ilanı olabilir; birim fiyatı kontrol edin")
+        if kupon_kodu:
+            notlar.append(f"Fiyat için kod gerekli: {kupon_kodu}")
+        elif "coupon" in b_kucuk or "code promo" in b_kucuk or "via " in b_kucuk:
+            notlar.append("Fiyat kupon/kod/koşul içerebilir (ilanı okuyun)")
+        if asin:
+            amazon_bag = f"https://www.amazon.fr/dp/{asin}"
+        elif ilan_no.isdigit():
+            # Dealabs'ın "Voir le deal" yönlendirmesi: tıklayınca doğrudan Amazon ürün sayfası açılır.
+            # Program bu adresi kendisi ZİYARET ETMEZ (robots.txt /visit/ yolunu botlara kapatıyor);
+            # sadece mesaja koyar, tıklayan kişi sizsiniz.
+            amazon_bag = f"https://www.dealabs.com/visit/threadmain/{ilan_no}"
+        else:
+            amazon_bag = "https://www.amazon.fr/s?k=" + urllib.parse.quote_plus(baslik[:120])
+            notlar.append("ASIN bilinmiyor: bağlantı Amazon.fr araması; doğru ürün/varyantı kontrol edin")
+        sinyal = {"groupe/erreur-de-prix": "erreur_de_prix", "tendance": "tendance"}.get(akis)
+        return Teklif(
+            kaynak=self.ad,
+            urun_anahtari=f"dealabs:{ilan_no}",
+            baslik=baslik,
+            fiyat=fiyat,
+            bag=amazon_bag,
+            kontrol_zamani=zaman,
+            asin=asin,
+            kargo=kargo,
+            durum=durum,
+            satici=satici,
+            stokta=None,
+            kategori=kategori,
+            sinyaller=[s for s in [sinyal] if s] + (
+                ["baslik_hata"] if HATA_KELIMELERI.search(f"{b_kucuk} {aciklama.lower()}") else []),
+            notlar=notlar,
+            ek_bag=ilan_bag,
+            derece=derece,
+            normal_fiyat_beyan=normal_fiyat,
+        )
 
 
 # ---------------------------------------------------------------- Keepa

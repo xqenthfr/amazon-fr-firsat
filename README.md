@@ -107,6 +107,16 @@ Dealabs ilanlarında geçmiş olmadığı için puan topluluk sinyalinden gelir:
 ilan 55–65 puan alır ve "Olası fiyat hatası (topluluk bildirimi, doğrulanmadı)" etiketiyle gönderilir.
 "Olası fiyat hatası" etiketinin doğrulanmış hali için gerçek fiyat geçmişi (Keepa) gerekir.
 
+**Bildirim kuralı (varsayılan):** (1) fiyat hatası şüphesi olan her Amazon.fr ilanı ("erreur de prix" grubu
+veya başlıkta "erreur/bug de prix") ve (2) indirimi **%50'den fazla** olan ilanlar bildirilir. İndirim, Keepa varsa
+fiyat geçmişinden; yoksa Dealabs'ta ilanı paylaşanın yazdığı "normal fiyat"tan hesaplanır (doğrulanmamış beyan).
+Normal fiyat yazmayan ilanlarda indirim bilinemez, bunlar yalnızca fiyat hatası şüphesi varsa gelir.
+Eski puan eşiği kuralına dönmek için `veri/ayarlar.json` içinde `"bildirim_kurali": "puan"` yapılabilir.
+
+**Dealabs verisi:** Ana listeler (yeni, popüler, erreur de prix) Dealabs liste sayfalarından okunur; bu sayfalar
+RSS'te olmayan normal fiyat, kargo, derece ve mağaza adresini (yalnızca amazon.fr alınır; amazon.de/.it elenir)
+içerir. Sayfa okunamazsa RSS'e düşülür. Kategori yedekleri RSS'ten okunur.
+
 **Tarama mantığı (Dealabs):** 5 dakikada bir "nouveaux", "erreur de prix" ve "tendance" akışları okunur. Ayrıca 13
 kategori akışından (informatique, cartes-graphiques, dyson, jeux-video…) her turda sırayla 2'si okunur. "nouveaux"
 listesinde iki tur arasında boşluk varsa (ilan kaçmış olabilir) tüm kategori akışları okunur ve uyarı kaydedilir.

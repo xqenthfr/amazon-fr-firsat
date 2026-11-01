@@ -70,6 +70,11 @@ DEGERLI_KELIMELER = ["dyson", "ninja", "rtx", "macbook", "iphone", "ipad", "ps5"
 
 VARSAYILAN_AYARLAR: dict = {
     "tarama_araligi_dakika": 5,
+    # Bildirim kuralı:
+    #  "hata_veya_indirim" -> fiyat hatası şüphesi olan her ilan + indirimi en az min_indirim_yuzde olanlar
+    #  "puan"              -> puanı min_puan'ı geçenler (takip kelimeleri için takip_min_puan)
+    "bildirim_kurali": "hata_veya_indirim",
+    "min_indirim_yuzde": 50,
     "min_puan": 60,
     # Bu kelimeleri içeren ürünlerde daha düşük puan da bildirilir (ilgi listesi)
     "takip_kelimeleri": ["dyson", "ninja", "rtx", "radeon", "ps5", "playstation 5", "xbox series",

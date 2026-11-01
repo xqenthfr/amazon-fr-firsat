@@ -186,6 +186,36 @@ class DereceSinyali(unittest.TestCase):
         self.assertEqual(hizli.puan, yavas.puan + 5)
 
 
+class BildirimKurali(unittest.TestCase):
+    """Varsayılan kural: her fiyat hatası şüphesi + en az %50 indirim. Diğerleri bildirilmez."""
+
+    def _tara(self, teklifler):
+        bot = SahteBot()
+        Tarayici(ayarlar(), Depo(":memory:"), [SahteKaynak(teklifler)], bot).tara()
+        return bot.gonderilen
+
+    def test_her_fiyat_hatasi_bildirilir(self):
+        # Puanı düşük olsa bile (geçmiş yok, beyan yok) fiyat hatası şüphesi bildirilir
+        g = self._tara([teklif(45, None, sinyaller=["baslik_hata"], asin="H1", baslik="Tapis (TEST)",
+                               kategori="Sport")])
+        self.assertEqual(len(g), 1)
+        self.assertIn("Fiyat hatası şüphesi", g[0])
+
+    def test_yuzde_elli_esigi(self):
+        g = self._tara([
+            teklif(49, None, normal_fiyat_beyan=100.0, asin="A51"),   # %51 -> bildirilir
+            teklif(55, None, normal_fiyat_beyan=100.0, asin="A45"),   # %45 -> bildirilmez
+            teklif(45, None, derece=900, asin="POP"),                 # çok popüler ama indirim bilinmiyor
+        ])
+        self.assertEqual(len(g), 1)
+        self.assertIn("%51", g[0])
+
+    def test_gecmisle_yuzde_elli(self):
+        g = self._tara([teklif(45, gecmis_uret([150] * 180), asin="K1"),     # %70
+                        teklif(100, gecmis_uret([150] * 180), asin="K2")])   # %33
+        self.assertEqual(len(g), 1)
+
+
 class TakipKelimeleri(unittest.TestCase):
     """Takip listesindeki ürünler daha düşük puanda da bildirilir; diğerleri bildirilmez."""
 
@@ -194,7 +224,8 @@ class TakipKelimeleri(unittest.TestCase):
         bot = SahteBot()
         takipli = teklif(45, None, baslik="Aspirateur Dyson V8 (TEST)", sinyaller=["tendance"], asin="A1")
         diger = teklif(45, None, baslik="Tapis de yoga (TEST)", kategori="Sport", sinyaller=["tendance"], asin="A2")
-        s = Tarayici(ayarlar(min_puan=60, takip_min_puan=30), depo, [SahteKaynak([takipli, diger])], bot).tara()
+        s = Tarayici(ayarlar(bildirim_kurali="puan", min_puan=60, takip_min_puan=30), depo,
+                     [SahteKaynak([takipli, diger])], bot).tara()
         self.assertEqual(s["gonderilen"], 1)
         self.assertIn("Dyson", bot.gonderilen[0])
         self.assertIn("Takip listenizdeki", bot.gonderilen[0])

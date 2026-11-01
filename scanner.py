@@ -56,6 +56,26 @@ class Tarayici:
         esik = 1 - self.ayarlar["tekrar_bildirim_dusus_yuzde"] / 100
         return etkin_fiyat <= son["fiyat"] * esik
 
+    def esigi_geciyor(self, t: Teklif, a) -> bool:
+        """Bu teklif bildirilecek kadar önemli mi? Kural ayarlardan seçilir."""
+        if self.ayarlar.get("bildirim_kurali", "puan") == "hata_veya_indirim":
+            if "erreur_de_prix" in t.sinyaller or "baslik_hata" in t.sinyaller:
+                a.nedenler.insert(0, "Fiyat hatası şüphesi (her biri bildirilir)")
+                return True
+            min_indirim = float(self.ayarlar.get("min_indirim_yuzde", 50))
+            if a.indirim_yuzde is not None and a.indirim_yuzde >= min_indirim and a.guven != "yok":
+                a.nedenler.insert(0, f"İndirim %{a.indirim_yuzde:.0f} (eşik %{min_indirim:.0f})")
+                return True
+            return False
+        min_puan = int(self.ayarlar["min_puan"])
+        takipte = any(k in t.baslik.lower() for k in self.ayarlar.get("takip_kelimeleri", []))
+        esik = min(min_puan, int(self.ayarlar.get("takip_min_puan", min_puan))) if takipte else min_puan
+        if a.puan < esik:
+            return False
+        if takipte and a.puan < min_puan:
+            a.nedenler.append("Takip listenizdeki bir ürün")
+        return True
+
     @staticmethod
     def tekil_anahtar(t: Teklif) -> str:
         """Aynı ürünü farklı ilanlarda/kaynaklarda tanımak için: ASIN varsa ASIN, yoksa başlık."""
@@ -143,13 +163,8 @@ class Tarayici:
                 self._gozlem_kaydet(t)
                 if a.kategori_grubu not in acik_kategoriler:
                     continue
-                baslik_k = t.baslik.lower()
-                takipte = any(k in baslik_k for k in self.ayarlar.get("takip_kelimeleri", []))
-                esik = min(min_puan, int(self.ayarlar.get("takip_min_puan", min_puan))) if takipte else min_puan
-                if a.puan < esik or a.etkin_fiyat is None:
+                if a.etkin_fiyat is None or not self.esigi_geciyor(t, a):
                     continue
-                if takipte and a.puan < min_puan:
-                    a.nedenler.append("Takip listenizdeki bir ürün")
                 firsat += 1
                 anahtar = self.tekil_anahtar(t)
                 ayrinti = {"analiz": asdict(a), "satici": t.satici, "durum": t.durum,
