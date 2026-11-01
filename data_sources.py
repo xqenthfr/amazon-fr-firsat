@@ -121,6 +121,8 @@ def baslik_anahtari(baslik: str) -> str:
 # İlan sahibinin başlıkta/açıklamada fiyat hatası şüphesi belirtmesi
 HATA_KELIMELERI = re.compile(r"erreur de prix|erreur prix|bug de prix|prix bugg?é|prix bug|price error")
 
+DERECE_DESENI = re.compile(r"^\s*(-?\d{1,5})°\s*-\s*")
+
 ASIN_DESENI = re.compile(r"amazon\.fr/(?:[^\s\"'<>]*/)?(?:dp|gp/product)/([A-Z0-9]{10})")
 
 
@@ -187,7 +189,10 @@ class DealabsKaynagi:
             self._bosluk_kontrol(govde)
         for t in self.ayristir(govde, akis):
             if t.urun_anahtari in sonuc:  # aynı ilan birden çok akışta
-                sonuc[t.urun_anahtari].sinyaller = sorted(set(sonuc[t.urun_anahtari].sinyaller + t.sinyaller))
+                eski = sonuc[t.urun_anahtari]
+                eski.sinyaller = sorted(set(eski.sinyaller + t.sinyaller))
+                if t.derece is not None and (eski.derece is None or t.derece > eski.derece):
+                    eski.derece = t.derece
             else:
                 sonuc[t.urun_anahtari] = t
 
@@ -226,6 +231,11 @@ class DealabsKaynagi:
             if self.sadece_amazon and "amazon" not in magaza.lower():
                 continue
             baslik = html.unescape((item.findtext("title") or "").strip())
+            # 'tendance' akışında başlık "129° - Ürün adı" biçiminde: dereceyi ayır
+            dm = DERECE_DESENI.match(baslik)
+            derece = int(dm.group(1)) if dm else None
+            if dm:
+                baslik = baslik[dm.end():]
             aciklama = item.findtext("description") or ""
             fiyat = eur_oku(satici_el.get("price") if satici_el is not None else None)
             bag = (item.findtext("link") or "").strip()
@@ -281,6 +291,7 @@ class DealabsKaynagi:
                     ["baslik_hata"] if HATA_KELIMELERI.search(f"{b_kucuk} {aciklama.lower()}") else []),
                 notlar=notlar,
                 ek_bag=bag,
+                derece=derece,
             ))
         return teklifler
 

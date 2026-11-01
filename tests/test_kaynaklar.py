@@ -104,6 +104,17 @@ class Dealabs(unittest.TestCase):
         self.assertIn("doğrulanmadı", a.etiket)
         self.assertLessEqual(a.puan, 70)
 
+    def test_derece_ayiklama_ve_birlesme(self):
+        sicak = ORNEK_RSS.replace(b"[CDATA[Friteuse Ninja", b"[CDATA[412\xc2\xb0 - Friteuse Ninja")
+
+        def getir(url):
+            return 200, (sicak if url.endswith("tendance") else ORNEK_RSS)
+        tek = DealabsKaynagi(["nouveaux", "tendance"], getir=getir, max_yas_saat=0).teklifleri_al()
+        ninja = [t for t in tek if "Ninja" in t.baslik][0]
+        self.assertEqual(ninja.derece, 412)
+        self.assertTrue(ninja.baslik.startswith("Friteuse Ninja"))
+        self.assertIn("tendance", ninja.sinyaller)
+
     def test_bozuk_xml(self):
         with self.assertRaises(KaynakHatasi):
             DealabsKaynagi([]).ayristir(b"<rss><item>")

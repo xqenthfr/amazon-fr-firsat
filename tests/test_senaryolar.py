@@ -163,6 +163,29 @@ class S6_TekrarBildirim(unittest.TestCase):
             self.assertEqual(len(self.bot.gonderilen), 1)
 
 
+class DereceSinyali(unittest.TestCase):
+    """Dealabs derecesi: çok beğenilen fırsat bildirilir ama fiyat hatası denmez, tavan 70."""
+
+    def test_derece_esikleri(self):
+        def puan(derece, **ek):
+            return analiz_et(teklif(45, None, derece=derece, sinyaller=["tendance"],
+                                    kontrol_zamani=datetime.now(timezone.utc) - timedelta(hours=24), **ek))
+        dusuk, orta, yuksek, cok = puan(80), puan(220), puan(350), puan(900)
+        self.assertLess(dusuk.puan, 60)
+        self.assertLess(dusuk.puan, orta.puan)
+        self.assertLess(orta.puan, yuksek.puan)
+        self.assertGreaterEqual(yuksek.puan, 60)     # 300°+ bildirilir
+        self.assertLessEqual(cok.puan, 70)           # geçmiş yok: tavan
+        self.assertIn("Popüler fırsat", yuksek.etiket)
+        self.assertNotIn("hatası", yuksek.etiket)
+        self.assertEqual(yuksek.guven, "düşük")
+
+    def test_hizli_isinma_bonusu(self):
+        yavas = analiz_et(teklif(45, None, derece=200, kontrol_zamani=datetime.now(timezone.utc) - timedelta(hours=20)))
+        hizli = analiz_et(teklif(45, None, derece=200, kontrol_zamani=datetime.now(timezone.utc) - timedelta(hours=1)))
+        self.assertEqual(hizli.puan, yavas.puan + 5)
+
+
 class TakipKelimeleri(unittest.TestCase):
     """Takip listesindeki ürünler daha düşük puanda da bildirilir; diğerleri bildirilmez."""
 

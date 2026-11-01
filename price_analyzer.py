@@ -121,6 +121,7 @@ class Teklif:
     notlar: list[str] = field(default_factory=list)  # varyant/paket uyarıları vb.
     ek_bag: str | None = None     # ör. Dealabs ilan sayfası
     kargo_prime_varsayim: bool = False  # kargo bilinmiyor ama Prime ile muhtemelen ücretsiz
+    derece: int | None = None     # Dealabs topluluk beğenisi (°); yalnızca 'tendance' akışında var
 
     def etkin_fiyat(self) -> float | None:
         if self.fiyat is None:
@@ -171,6 +172,14 @@ def prime_uygula(t: Teklif) -> None:
         t.notlar.append("Prime ile kargo büyük olasılıkla ücretsiz; satıcı Amazon/Amazon gönderimli "
                         "değilse kargo çıkabilir")
         t.kargo_prime_varsayim = True
+
+
+def derece_puani(derece: int) -> int:
+    """Dealabs derecesi -> puan. Fiyat geçmişi yerine geçmez; sadece topluluk ilgisini gösterir."""
+    for esik, puan in ((500, 65), (300, 55), (200, 45), (100, 25)):
+        if derece >= esik:
+            return puan
+    return 15 if derece > 0 else 0
 
 
 def _sinirla(deger: float, alt: float = 0.0, ust: float = 1.0) -> float:
@@ -276,7 +285,15 @@ def analiz_et(t: Teklif) -> Analiz:
         elif "baslik_hata" in t.sinyaller:
             puan += 45
             nedenler.append("İlan sahibi fiyat hatası olabileceğini yazmış")
-        if "tendance" in t.sinyaller:
+        if t.derece is not None:
+            puan += derece_puani(t.derece)
+            hiz = t.derece / max(1.0, (datetime.now(timezone.utc) - t.kontrol_zamani).total_seconds() / 3600)
+            if hiz >= 50:
+                puan += 5
+                nedenler.append(f"Dealabs'ta hızla ısınıyor ({t.derece}°, saatte ~{hiz:.0f}°)")
+            else:
+                nedenler.append(f"Dealabs topluluğu çok beğenmiş ({t.derece}°)")
+        elif "tendance" in t.sinyaller:
             puan += 25
             nedenler.append("Dealabs'ta popüler (tendance)")
         if t.liste_fiyati and t.liste_fiyati > etkin:
@@ -321,6 +338,8 @@ def analiz_et(t: Teklif) -> Analiz:
     elif (not gecmis_var and puan_i >= 50
           and ("erreur_de_prix" in t.sinyaller or "baslik_hata" in t.sinyaller)):
         etiket = "Olası fiyat hatası (topluluk bildirimi, doğrulanmadı)"
+    elif not gecmis_var and (t.derece or 0) >= 200 and puan_i >= 50:
+        etiket = "Popüler fırsat (topluluk beğenisi, fiyat geçmişi yok)"
     elif puan_i >= 75:
         etiket = "Yüksek öncelikli fırsat"
     elif puan_i >= 50 and (indirim or 0) >= 30:
